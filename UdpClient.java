@@ -20,6 +20,7 @@ public class UdpClient {
     public static void main(String[] args) throws Exception {
         try (Socket socket = new Socket("codebank.xyz", 38005)) {
             int payload;
+            short port;
             byte[] input = new byte[4];
             input[0] = (byte)222;
             input[1] = (byte)173;
@@ -32,10 +33,10 @@ public class UdpClient {
             BufferedReader br = new BufferedReader(isr);
             OutputStream os = socket.getOutputStream();
             
-            os.write(recalculatePacket(4, mix, true, input, (byte)6, false));
+            os.write(recalculatePacket(4, mix, true, input, (byte)17, false, (short) 0));
             
             int[] read = new int[6];
-            read[0]  = is.read();
+            read[0] = is.read();
             read[1] = is.read();
             read[2] = is.read();
             read[3] = is.read();
@@ -49,22 +50,35 @@ public class UdpClient {
             payload = (read[4] << 8);
             payload += (read[5]);
             System.out.println("Port number received: "+payload);
+            port = (short) payload;
             
             for(int i = 0; i < 12; i++ ){
                 payload = 2;
                 for(int j = i; j > 0; j--){
                     payload *=2;
                 }
-            os.write(recalculatePacket(payload, mix, false, input, (byte)17, true));
+            os.write(recalculatePacket(payload, mix, false, input, (byte)17, true, port));
             System.out.println("data length: "+payload);
-            System.out.println(br.readLine()+"\n");
+            read[0] = is.read();
+            read[1] = is.read();
+            read[2] = is.read();
+            read[3] = is.read();
+            for(int mn = 0; mn < 4; mn++){
+                System.out.printf("%X", (read[mn]));
+            }
+            System.out.println();
             }
         }
     }
-    public static byte[] recalculatePacket(int size,Random random, boolean overwrite, byte[] custom, byte protocol, boolean udp) {
+    public static byte[] recalculatePacket(int size,Random random, boolean overwrite, byte[] custom, byte protocol, boolean udp, short udpport) {
         byte versionAndIHL = 69;
         byte tos = 0;
-        short length = (short)(28 + size);
+        short length;
+        if(udp){
+            length = (short)(28 + size);
+        }else{
+            length = (short)(20 + size);
+        }
         short ident = 0;
         short flagsAndFrag = 1;
         flagsAndFrag <<= 14;
@@ -73,19 +87,17 @@ public class UdpClient {
         int sourceAddr = 1824010952;
         int destAddr = 874862746;
         short sourcePort = 0;
-        short destPort = (short)38005;
+        short destPort = udpport;
         short udplength = (short)(8 + size);
         int udpchecksum = 0;
         int[] checksumCount = new int[22];
-        int sizeroundup;
-        if(size % 2 == 0){
-            sizeroundup = size/2;
-        }else{ 
-            sizeroundup = size/2;
-            sizeroundup++;
+        int[] udpchecksumCount = new int[10 + (size)];
+        byte[] temp;
+        if(udp){
+            temp = new byte[(28+size)];
+        }else{
+            temp = new byte[(20+size)];
         }
-        int[] udpchecksumCount = new int[10 + (sizeroundup)];
-        byte[] temp = new byte[(28+size)];
         temp[0] = versionAndIHL;
         temp[1] = tos;
         temp[2] = (byte) (length >> 8);
@@ -116,6 +128,19 @@ public class UdpClient {
         for (int i = 0; i < 10; i++) {
             checksum += checksumCount[i];
         }
+        
+        if(overwrite && !udp){
+            for(int n = 20; n < (20+size); n++){
+                temp[n] = custom[(n-20)];
+            }
+        }
+        
+        checksum++;
+        checksum = ~checksum;
+        temp[10] = (byte) (checksum >> 8);
+        temp[11] = (byte) (checksum & 0xFF);        
+        
+        if(udp){
         temp[20] = (byte) (sourcePort);
         temp[21] = (byte) (sourcePort);
         temp[22] = (byte) (destPort >> 8);
@@ -137,34 +162,31 @@ public class UdpClient {
         udpchecksumCount[6] += sourcePort;
         udpchecksumCount[7] += destPort;
         udpchecksumCount[8] += length;
-        udpchecksumCount[9] += 0;
+        udpchecksumCount[9] = 0;
+        //udpchecksumCount[9] += (short) (temp[10] << 8);
+        //udpchecksumCount[9] += (short) (temp[11]);
         
         byte[] randomData = new byte[size];
         random.nextBytes(randomData);
         
-        if(overwrite){
-            for (int m = 10; m < (10 + (sizeroundup)); m++){
-                udpchecksumCount[m] += (randomData[(m-10)] << 8);
-                udpchecksumCount[m] += (randomData[(m-10)]);
-            }
-        }else{
-            for (int m = 10; m < (10 + (sizeroundup)); m++){
-                udpchecksumCount[m] += (custom[(m-10)] << 8);
-                udpchecksumCount[m] += (custom[(m-10)]);
-            }            
+        for (int m = 0; m < size; m += 2){
+            udpchecksumCount[(m+10)] += (randomData[(m)] << 8);
+            udpchecksumCount[(m+10)] += (randomData[(m+1)]);
         }
         
         for(int n = 0; n < (10 + (size/2)); n++){
             udpchecksum += udpchecksumCount[n];
         }
+        
         udpchecksum++;
         udpchecksum = ~udpchecksum;
-        checksum++;
-        checksum = ~checksum;
-        temp[10] = (byte) (checksum >> 8);
-        temp[11] = (byte) (checksum & 0xFF);
+        }
+
+        
+        if(udp){
         temp[26] = (byte) (udpchecksum >> 8);
         temp[27] = (byte) (udpchecksum & 0xFF);
+        }
         
         return temp;
     }
