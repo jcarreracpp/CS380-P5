@@ -92,7 +92,7 @@ public class UdpClient {
         short sourcePort = 0;
         int destPort = udpport;
         short udplength = (short)(8 + size);
-        int udpchecksum = 0;
+        long udpchecksum = 0;
         int[] checksumCount = new int[22];
         int[] udpchecksumCount = new int[(10 + (size/2))];
         byte[] temp;
@@ -151,42 +151,46 @@ public class UdpClient {
         temp[24] = (byte) (udplength >> 8);
         temp[25] = (byte) (udplength);
         
-        udpchecksumCount[0] += (sourceAddr >> 16);
-        udpchecksumCount[1] += (sourceAddr);
-        udpchecksumCount[2] += (destAddr >> 16);
-        udpchecksumCount[3] += (destAddr);
-        udpchecksumCount[4] += protocol;
-        udpchecksumCount[5] += udplength;
-        udpchecksumCount[6] += sourcePort;
-        udpchecksumCount[7] += destPort;
-        udpchecksumCount[8] += udplength;
+        udpchecksumCount[0] += (short)(sourceAddr >> 16);
+        udpchecksumCount[1] += (short)(sourceAddr);
+        udpchecksumCount[2] += (short)(destAddr >> 16);
+        udpchecksumCount[3] += (short)(destAddr);
+        udpchecksumCount[4] += (short)protocol;
+        udpchecksumCount[5] += (short)udplength;
+        udpchecksumCount[6] += (short)sourcePort;
+        udpchecksumCount[7] += (short)destPort;
+        udpchecksumCount[8] += (short)udplength;
         udpchecksumCount[9] += (short) 0;
         
         byte[] randomData = new byte[size];
         random.nextBytes(randomData);
         
-        
+        //Assigning random values
         for(int p = 0; p < size; p++){
             temp[(p+28)] = randomData[p];
         }
         
+        //Appending values into shorts and storing.
         for (int m = 0; m < (size/2); m++){
             udpchecksumCount[(m+10)] += (short)(temp[((2*m)+28)] << 8);
             udpchecksumCount[(m+10)] += (short)(temp[((2*m)+29)] & 0xFF);
         }
         
-        
+        //Adding all values to checksum
         for(int n = 0; n < (10 + (size/2)); n++){
-            udpchecksum += (short) udpchecksumCount[n];
-            while(((udpchecksum & 0xF0000) >> 16) == 1){
-
-                udpchecksum = udpchecksum & 0xFFFF;
+            udpchecksum +=  (short)udpchecksumCount[n];
+            if(((udpchecksum & 0xF0000) >> 16) == 1){
+                udpchecksum &= 0xFFFF;
                 udpchecksum++;
             }
+            if(n > 9)
+                System.out.println(n + "\t" + udpchecksumCount[n] + "\t\t" + (udpchecksum));
         }
+      
+        udpchecksum++;
+
+        udpchecksum = (short)~udpchecksum;
         
-        //udpchecksum++;
-        udpchecksum = ~udpchecksum;
 
         temp[26] = (byte) (udpchecksum >> 8);
         temp[27] = (byte) (udpchecksum & 0xFF);
