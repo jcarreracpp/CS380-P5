@@ -14,7 +14,10 @@ public class UdpClient {
     public static void main(String[] args) throws Exception {
         try (Socket socket = new Socket("codebank.xyz", 38005)) {
             int payload;
-            short port;
+            int port;
+            long timerStart;
+            long timerStop;
+            float timerAccrue = 0;
             byte[] input = new byte[4];
             
             input[0] = (byte)222;
@@ -41,14 +44,15 @@ public class UdpClient {
             read[5] = is.read();
             
             //Prints received message.
+            System.out.print("Handshake Response: 0x");
             for(int mn = 0; mn < 4; mn++){
                 System.out.printf("%X", (read[mn]));
             }
 
-            System.out.println();
+
             payload = (read[4] << 8);
             payload += (read[5] & 0xFF);
-            System.out.println("Port number received: "+payload);
+            System.out.println("\n\nPort number received: "+payload);
             port = (short) payload;
             
             //Main loop, doubles payload size every time.
@@ -57,18 +61,24 @@ public class UdpClient {
                 for(int j = i; j > 0; j--){
                     payload *=2;
                 }
-                
+            timerStart = System.nanoTime();    
             os.write(recalculatePacket(payload, mix, false, input, (byte)17, true, port));
-            System.out.println("data length: "+ payload);
+            System.out.println("Sending packet with "+ payload + " bytes of data.");
             read[0] = is.read();
             read[1] = is.read();
             read[2] = is.read();
             read[3] = is.read();
+            timerStop = System.nanoTime();
+            
+            System.out.print("Response: 0x");
             for(int mn = 0; mn < 4; mn++){
                 System.out.printf("%X", (read[mn]));
             }
-            System.out.println();
+            System.out.println("\nRTT: " + ((timerStop-timerStart)/1000000) + "ms\n");
+            timerAccrue += ((timerStop-timerStart)/1000000);
             }
+            timerAccrue /= 12;
+            System.out.printf("Average RTT: %.2fms\n", timerAccrue);
         }
     }
     
@@ -90,11 +100,12 @@ public class UdpClient {
         int sourceAddr = 1824010952;
         int destAddr = 874862746;
         short sourcePort = 0;
-        int destPort = udpport;
+        short destPort = (short) udpport;
         short udplength = (short)(8 + size);
-        long udpchecksum = 0;
+        int udpchecksum = 0;
         int[] checksumCount = new int[22];
-        int[] udpchecksumCount = new int[(10 + (size/2))];
+        byte[] udpchecksumCount = new byte[(20 + size)];
+        int[] udpcompressor = new int[(10 + (size/2))];
         byte[] temp;
         if(udp){
             temp = new byte[(28+size)];
@@ -142,58 +153,65 @@ public class UdpClient {
         temp[10] = (byte) (checksum >> 8);
         temp[11] = (byte) (checksum & 0xFF);        
         
-        //UDP initializing section.
+        
         if(udp){
-        temp[20] = (byte) (sourcePort);
+            
+        temp[20] = (byte) (sourcePort >> 8);
         temp[21] = (byte) (sourcePort);
         temp[22] = (byte) (destPort >> 8);
         temp[23] = (byte) (destPort);
         temp[24] = (byte) (udplength >> 8);
         temp[25] = (byte) (udplength);
         
-        udpchecksumCount[0] += (short)(sourceAddr >> 16);
-        udpchecksumCount[1] += (short)(sourceAddr);
-        udpchecksumCount[2] += (short)(destAddr >> 16);
-        udpchecksumCount[3] += (short)(destAddr);
-        udpchecksumCount[4] += (short)protocol;
-        udpchecksumCount[5] += (short)udplength;
-        udpchecksumCount[6] += (short)sourcePort;
-        udpchecksumCount[7] += (short)destPort;
-        udpchecksumCount[8] += (short)udplength;
-        udpchecksumCount[9] += (short) 0;
+        udpchecksumCount[0] = (byte)(sourceAddr >> 24);
+        udpchecksumCount[1] = (byte)(sourceAddr >> 16);
+        udpchecksumCount[2] = (byte)(sourceAddr >> 8);
+        udpchecksumCount[3] = (byte)(sourceAddr);
+        udpchecksumCount[4] = (byte)(destAddr >> 24);
+        udpchecksumCount[5] = (byte)(destAddr >> 16);
+        udpchecksumCount[6] = (byte)(destAddr >> 8);
+        udpchecksumCount[7] = (byte)(destAddr);
+        udpchecksumCount[8] = 0;
+        udpchecksumCount[9] = protocol;
+        udpchecksumCount[10] = (byte)(udplength >> 8);
+        udpchecksumCount[11] = (byte)(udplength);
+        udpchecksumCount[12] = (byte)(sourcePort >> 8);
+        udpchecksumCount[13] = (byte)(sourcePort);
+        udpchecksumCount[14] = (byte)(destPort >> 8);
+        udpchecksumCount[15] = (byte)(destPort);
+        udpchecksumCount[16] = (byte)(udplength >> 8);
+        udpchecksumCount[17] = (byte)(udplength);
+        udpchecksumCount[18] = 0;
+        udpchecksumCount[19] = 0;
         
         byte[] randomData = new byte[size];
         random.nextBytes(randomData);
         
         //Assigning random values
         for(int p = 0; p < size; p++){
-            temp[(p+28)] = randomData[p];
+            temp[p+28] = randomData[p];
+            udpchecksumCount[p+20] = randomData[p];
         }
         
-        //Appending values into shorts and storing.
-        for (int m = 0; m < (size/2); m++){
-            udpchecksumCount[(m+10)] += (short)(temp[((2*m)+28)] << 8);
-            udpchecksumCount[(m+10)] += (short)(temp[((2*m)+29)] & 0xFF);
+        //Compressing one short per every two bytes.
+        for (int m = 0; m < (20 + size); m += 2){
+            udpcompressor[(m/2)] += ((udpchecksumCount[m] << 8) & 0xFF00);
+            udpcompressor[(m/2)] += (udpchecksumCount[m+1] & 0xFF);
         }
         
-        //Adding all values to checksum
-        for(int n = 0; n < (10 + (size/2)); n++){
-            udpchecksum +=  (short)udpchecksumCount[n];
-            if(((udpchecksum & 0xF0000) >> 16) == 1){
-                udpchecksum &= 0xFFFF;
-                udpchecksum++;
+        for (int d = 0; d < (10+(size/2)); d++) {
+            udpchecksum += udpcompressor[d];
+            if((udpchecksum & 0xFFFF0000) != 0){
+                udpchecksum &= 0x0000FFFF;
+                udpchecksum ++;
             }
-            if(n > 9)
-                System.out.println(n + "\t" + udpchecksumCount[n] + "\t\t" + (udpchecksum));
         }
-      
-        udpchecksum++;
-
-        udpchecksum = (short)~udpchecksum;
         
+        udpchecksum = (short)~udpchecksum;
 
         temp[26] = (byte) (udpchecksum >> 8);
         temp[27] = (byte) (udpchecksum & 0xFF);
+        
         }
         
         return temp;
